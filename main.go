@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/xml"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -74,13 +76,58 @@ type Hostname struct {
 	Type string `xml:"type,attr"`
 }
 
+// getIPAddress extracts the IP address from a host, preferring IPv4
+func getIPAddress(host Host) string {
+	var ipAddress string
+	for _, addr := range host.Address {
+		if addr.AddrType == "ipv4" {
+			ipAddress = addr.Addr
+			break
+		}
+	}
+	// Fallback to first address if no IPv4 found
+	if ipAddress == "" && len(host.Address) > 0 {
+		for _, addr := range host.Address {
+			if addr.AddrType == "ipv4" || addr.AddrType == "ipv6" {
+				ipAddress = addr.Addr
+				break
+			}
+		}
+	}
+	if ipAddress == "" && len(host.Address) > 0 {
+		ipAddress = host.Address[0].Addr
+	}
+	return ipAddress
+}
+
+// getHostname extracts hostname(s) from a host
+func getHostname(host Host) string {
+	var hostnames []string
+	for _, hostname := range host.Hostname {
+		hostnames = append(hostnames, hostname.Name)
+	}
+	hostnameStr := strings.Join(hostnames, ",")
+	if hostnameStr == "" {
+		hostnameStr = "-"
+	}
+	return hostnameStr
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <nmap-xml-file>\n", os.Args[0])
+	csvFlag := flag.Bool("csv", false, "Output results in CSV format with IP:PORT format")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <nmap-xml-file>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nFlags:\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		flag.Usage()
 		os.Exit(1)
 	}
 
-	filename := os.Args[1]
+	filename := flag.Arg(0)
 
 	// Read the XML file
 	data, err := os.ReadFile(filename)
@@ -97,90 +144,91 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Print header
-	fmt.Println("Hostname\tIP Address\tPorts")
+	if *csvFlag {
+		// CSV output format: one row per port with IP:PORT
+		writer := csv.NewWriter(os.Stdout)
+		defer writer.Flush()
 
-	// Process each host
-	for _, host := range nmapRun.Hosts {
-		// Skip hosts that are down
-		if host.Status.State != "up" {
-			continue
-		}
+		// Write CSV header
+		writer.Write([]string{"Hostname", "IP:PORT", "Protocol"})
 
-		// Extract IP address (prefer IPv4)
-		var ipAddress string
-		for _, addr := range host.Address {
-			if addr.AddrType == "ipv4" {
-				ipAddress = addr.Addr
-				break
+		// Process each host
+		for _, host := range nmapRun.Hosts {
+			// Skip hosts that are down
+			if host.Status.State != "up" {
+				continue
 			}
-		}
-		// Fallback to first address if no IPv4 found
-		if ipAddress == "" && len(host.Address) > 0 {
-			for _, addr := range host.Address {
-				if addr.AddrType == "ipv4" || addr.AddrType == "ipv6" {
-					ipAddress = addr.Addr
-					break
+
+			ipAddress := getIPAddress(host)
+			hostnameStr := getHostname(host)
+
+			// Write one row per open port
+			for _, port := range host.Ports.Port {
+				if port.State.State == "open" {
+					ipPort := fmt.Sprintf("%s:%d", ipAddress, port.PortID)
+					protocol := strings.ToUpper(port.Protocol)
+					writer.Write([]string{hostnameStr, ipPort, protocol})
 				}
 			}
 		}
-		if ipAddress == "" && len(host.Address) > 0 {
-			ipAddress = host.Address[0].Addr
-		}
+	} else {
+		// Tab-separated output format (default)
+		fmt.Println("Hostname\tIP Address\tPorts")
 
-		// Extract hostname(s)
-		var hostnames []string
-		for _, hostname := range host.Hostname {
-			hostnames = append(hostnames, hostname.Name)
-		}
-		hostnameStr := strings.Join(hostnames, ",")
-		if hostnameStr == "" {
-			hostnameStr = "-"
-		}
-
-		// Extract open ports grouped by protocol
-		portsByProtocol := make(map[string][]int)
-		for _, port := range host.Ports.Port {
-			if port.State.State == "open" {
-				protocol := strings.ToUpper(port.Protocol)
-				portsByProtocol[protocol] = append(portsByProtocol[protocol], port.PortID)
+		// Process each host
+		for _, host := range nmapRun.Hosts {
+			// Skip hosts that are down
+			if host.Status.State != "up" {
+				continue
 			}
-		}
 
-		var portGroups []string
-		// Order: TCP first, then UDP, then others alphabetically
-		protocolOrder := []string{"TCP", "UDP"}
-		processedProtocols := make(map[string]bool)
+			ipAddress := getIPAddress(host)
+			hostnameStr := getHostname(host)
 
-		// Process TCP and UDP first
-		for _, proto := range protocolOrder {
-			if ports, ok := portsByProtocol[proto]; ok {
-				portNums := make([]string, len(ports))
-				for i, p := range ports {
-					portNums[i] = fmt.Sprintf("%d", p)
+			// Extract open ports grouped by protocol
+			portsByProtocol := make(map[string][]int)
+			for _, port := range host.Ports.Port {
+				if port.State.State == "open" {
+					protocol := strings.ToUpper(port.Protocol)
+					portsByProtocol[protocol] = append(portsByProtocol[protocol], port.PortID)
 				}
-				portGroups = append(portGroups, fmt.Sprintf("%s %s", strings.Join(portNums, ", "), proto))
-				processedProtocols[proto] = true
 			}
-		}
 
-		// Process remaining protocols
-		for proto, ports := range portsByProtocol {
-			if !processedProtocols[proto] {
-				portNums := make([]string, len(ports))
-				for i, p := range ports {
-					portNums[i] = fmt.Sprintf("%d", p)
+			var portGroups []string
+			// Order: TCP first, then UDP, then others alphabetically
+			protocolOrder := []string{"TCP", "UDP"}
+			processedProtocols := make(map[string]bool)
+
+			// Process TCP and UDP first
+			for _, proto := range protocolOrder {
+				if ports, ok := portsByProtocol[proto]; ok {
+					portNums := make([]string, len(ports))
+					for i, p := range ports {
+						portNums[i] = fmt.Sprintf("%d", p)
+					}
+					portGroups = append(portGroups, fmt.Sprintf("%s %s", strings.Join(portNums, ", "), proto))
+					processedProtocols[proto] = true
 				}
-				portGroups = append(portGroups, fmt.Sprintf("%s %s", strings.Join(portNums, ", "), proto))
 			}
-		}
 
-		portsStr := strings.Join(portGroups, ", ")
-		if portsStr == "" {
-			portsStr = "-"
-		}
+			// Process remaining protocols
+			for proto, ports := range portsByProtocol {
+				if !processedProtocols[proto] {
+					portNums := make([]string, len(ports))
+					for i, p := range ports {
+						portNums[i] = fmt.Sprintf("%d", p)
+					}
+					portGroups = append(portGroups, fmt.Sprintf("%s %s", strings.Join(portNums, ", "), proto))
+				}
+			}
 
-		// Print row
-		fmt.Printf("%s\t%s\t%s\n", hostnameStr, ipAddress, portsStr)
+			portsStr := strings.Join(portGroups, ", ")
+			if portsStr == "" {
+				portsStr = "-"
+			}
+
+			// Print row
+			fmt.Printf("%s\t%s\t%s\n", hostnameStr, ipAddress, portsStr)
+		}
 	}
 }
