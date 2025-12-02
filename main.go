@@ -138,25 +138,44 @@ func main() {
 			hostnameStr = "-"
 		}
 
-		// Extract open ports
-		var ports []string
+		// Extract open ports grouped by protocol
+		portsByProtocol := make(map[string][]int)
 		for _, port := range host.Ports.Port {
 			if port.State.State == "open" {
-				portStr := fmt.Sprintf("%d/%s", port.PortID, port.Protocol)
-				if port.Service.Name != "" {
-					portStr += fmt.Sprintf(" (%s", port.Service.Name)
-					if port.Service.Product != "" {
-						portStr += fmt.Sprintf(" %s", port.Service.Product)
-						if port.Service.Version != "" {
-							portStr += fmt.Sprintf(" %s", port.Service.Version)
-						}
-					}
-					portStr += ")"
-				}
-				ports = append(ports, portStr)
+				protocol := strings.ToUpper(port.Protocol)
+				portsByProtocol[protocol] = append(portsByProtocol[protocol], port.PortID)
 			}
 		}
-		portsStr := strings.Join(ports, ", ")
+
+		var portGroups []string
+		// Order: TCP first, then UDP, then others alphabetically
+		protocolOrder := []string{"TCP", "UDP"}
+		processedProtocols := make(map[string]bool)
+
+		// Process TCP and UDP first
+		for _, proto := range protocolOrder {
+			if ports, ok := portsByProtocol[proto]; ok {
+				portNums := make([]string, len(ports))
+				for i, p := range ports {
+					portNums[i] = fmt.Sprintf("%d", p)
+				}
+				portGroups = append(portGroups, fmt.Sprintf("%s %s", strings.Join(portNums, ", "), proto))
+				processedProtocols[proto] = true
+			}
+		}
+
+		// Process remaining protocols
+		for proto, ports := range portsByProtocol {
+			if !processedProtocols[proto] {
+				portNums := make([]string, len(ports))
+				for i, p := range ports {
+					portNums[i] = fmt.Sprintf("%d", p)
+				}
+				portGroups = append(portGroups, fmt.Sprintf("%s %s", strings.Join(portNums, ", "), proto))
+			}
+		}
+
+		portsStr := strings.Join(portGroups, ", ")
 		if portsStr == "" {
 			portsStr = "-"
 		}
