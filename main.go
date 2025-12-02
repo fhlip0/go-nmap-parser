@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // NmapRun represents the root element of an nmap XML file
@@ -16,10 +17,10 @@ type NmapRun struct {
 
 // Host represents a scanned host
 type Host struct {
-	XMLName   xml.Name  `xml:"host"`
-	Status   Status    `xml:"status"`
-	Address  []Address `xml:"address"`
-	Ports    Ports     `xml:"ports"`
+	XMLName  xml.Name   `xml:"host"`
+	Status   Status     `xml:"status"`
+	Address  []Address  `xml:"address"`
+	Ports    Ports      `xml:"ports"`
 	Hostname []Hostname `xml:"hostnames>hostname"`
 }
 
@@ -44,9 +45,9 @@ type Ports struct {
 
 // Port represents a scanned port
 type Port struct {
-	Protocol string `xml:"protocol,attr"`
-	PortID   int    `xml:"portid,attr"`
-	State    State  `xml:"state"`
+	Protocol string  `xml:"protocol,attr"`
+	PortID   int     `xml:"portid,attr"`
+	State    State   `xml:"state"`
 	Service  Service `xml:"service"`
 }
 
@@ -59,12 +60,12 @@ type State struct {
 
 // Service represents service information
 type Service struct {
-	Name       string `xml:"name,attr"`
-	Product    string `xml:"product,attr"`
-	Version    string `xml:"version,attr"`
-	ExtraInfo  string `xml:"extrainfo,attr"`
-	Method     string `xml:"method,attr"`
-	Conf       string `xml:"conf,attr"`
+	Name      string `xml:"name,attr"`
+	Product   string `xml:"product,attr"`
+	Version   string `xml:"version,attr"`
+	ExtraInfo string `xml:"extrainfo,attr"`
+	Method    string `xml:"method,attr"`
+	Conf      string `xml:"conf,attr"`
 }
 
 // Hostname represents a hostname
@@ -80,7 +81,7 @@ func main() {
 	}
 
 	filename := os.Args[1]
-	
+
 	// Read the XML file
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -96,65 +97,71 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Display results
-	fmt.Printf("Nmap Scan Results\n")
-	fmt.Printf("================\n")
-	fmt.Printf("Version: %s\n", nmapRun.Version)
-	fmt.Printf("Start Time: %s\n", nmapRun.Start)
-	fmt.Printf("Total Hosts: %d\n\n", len(nmapRun.Hosts))
+	// Print header
+	fmt.Println("Hostname\tIP Address\tPorts")
 
-	for i, host := range nmapRun.Hosts {
-		fmt.Printf("Host %d:\n", i+1)
-		fmt.Printf("  Status: %s (%s)\n", host.Status.State, host.Status.Reason)
-		
-		// Print addresses
+	// Process each host
+	for _, host := range nmapRun.Hosts {
+		// Skip hosts that are down
+		if host.Status.State != "up" {
+			continue
+		}
+
+		// Extract IP address (prefer IPv4)
+		var ipAddress string
 		for _, addr := range host.Address {
-			fmt.Printf("  %s Address: %s", addr.AddrType, addr.Addr)
-			if addr.Vendor != "" {
-				fmt.Printf(" (%s)", addr.Vendor)
-			}
-			fmt.Println()
-		}
-		
-		// Print hostnames
-		if len(host.Hostname) > 0 {
-			fmt.Printf("  Hostnames:\n")
-			for _, hostname := range host.Hostname {
-				fmt.Printf("    - %s (%s)\n", hostname.Name, hostname.Type)
+			if addr.AddrType == "ipv4" {
+				ipAddress = addr.Addr
+				break
 			}
 		}
-		
-		// Print ports
-		if len(host.Ports.Port) > 0 {
-			fmt.Printf("  Ports:\n")
-			for _, port := range host.Ports.Port {
-				fmt.Printf("    %d/%s: %s", port.PortID, port.Protocol, port.State.State)
-				if port.State.Reason != "" {
-					fmt.Printf(" (%s)", port.State.Reason)
+		// Fallback to first address if no IPv4 found
+		if ipAddress == "" && len(host.Address) > 0 {
+			for _, addr := range host.Address {
+				if addr.AddrType == "ipv4" || addr.AddrType == "ipv6" {
+					ipAddress = addr.Addr
+					break
 				}
-				fmt.Println()
-				
-				// Print service information if available
+			}
+		}
+		if ipAddress == "" && len(host.Address) > 0 {
+			ipAddress = host.Address[0].Addr
+		}
+
+		// Extract hostname(s)
+		var hostnames []string
+		for _, hostname := range host.Hostname {
+			hostnames = append(hostnames, hostname.Name)
+		}
+		hostnameStr := strings.Join(hostnames, ",")
+		if hostnameStr == "" {
+			hostnameStr = "-"
+		}
+
+		// Extract open ports
+		var ports []string
+		for _, port := range host.Ports.Port {
+			if port.State.State == "open" {
+				portStr := fmt.Sprintf("%d/%s", port.PortID, port.Protocol)
 				if port.Service.Name != "" {
-					fmt.Printf("      Service: %s", port.Service.Name)
+					portStr += fmt.Sprintf(" (%s", port.Service.Name)
 					if port.Service.Product != "" {
-						fmt.Printf(" (%s", port.Service.Product)
+						portStr += fmt.Sprintf(" %s", port.Service.Product)
 						if port.Service.Version != "" {
-							fmt.Printf(" %s", port.Service.Version)
+							portStr += fmt.Sprintf(" %s", port.Service.Version)
 						}
-						fmt.Printf(")")
 					}
-					if port.Service.ExtraInfo != "" {
-						fmt.Printf(" - %s", port.Service.ExtraInfo)
-					}
-					fmt.Println()
+					portStr += ")"
 				}
+				ports = append(ports, portStr)
 			}
-		} else {
-			fmt.Printf("  No open ports found\n")
 		}
-		
-		fmt.Println()
+		portsStr := strings.Join(ports, ", ")
+		if portsStr == "" {
+			portsStr = "-"
+		}
+
+		// Print row
+		fmt.Printf("%s\t%s\t%s\n", hostnameStr, ipAddress, portsStr)
 	}
 }
-

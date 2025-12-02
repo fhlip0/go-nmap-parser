@@ -18,9 +18,33 @@ A simple Golang application that parses nmap XML output files and displays the r
 
 ## Installation
 
+### Build from source
+
 ```bash
 go build -o nmap-parser main.go
 ```
+
+### Build for multiple architectures with goreleaser
+
+Install goreleaser:
+```bash
+go install github.com/goreleaser/goreleaser@latest
+```
+
+Build for all supported platforms:
+```bash
+goreleaser build --snapshot
+```
+
+Or create a full release (requires git tag):
+```bash
+goreleaser release --snapshot
+```
+
+This will create builds for:
+- Linux (amd64, arm64, 386, armv6, armv7)
+- macOS (amd64, arm64)
+- Windows (amd64)
 
 ## Usage
 
